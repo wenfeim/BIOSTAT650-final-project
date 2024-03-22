@@ -1,0 +1,546 @@
+---
+title: "Group 14 Code"
+author: "Nathan Hemenway, Kalpana Das, Haotian Zheng, Wenfei Mao"
+date: "12/07/2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(NHANES)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(twopartm)
+library(olsrr)
+library(twopartm)
+library(kableExtra)
+library(magick)
+library(lmtest)
+```
+
+choosing our variables of interest
+
+```{r}
+??NHANES
+str(NHANES)
+dim(NHANES)
+
+# selecting a subset of variables
+NHANES %>%
+  select(DaysMentHlthBad, Age, Gender, HHIncome, Race1, SexOrientation, BMI_WHO, PhysActive, SleepTrouble, TVHrsDay, CompHrsDay, SmokeNow, AlcoholDay, AlcoholYear, RegularMarij, HardDrugs) -> data
+```
+
+EDA
+
+```{r}
+ggplot(data) +
+  geom_histogram(aes(x=DaysMentHlthBad), bins=30)
+# very right skewed distribution - log transformation would be a good choice
+# unevenly distributed data points with a distinct peak at 0
+# sparsely populated data points as the values increase
+
+ggplot(data) +
+  geom_histogram(aes(x=log(DaysMentHlthBad)), bins=30)
+
+# looking at how mental health is for people from different strata of income
+data %>%
+  select(DaysMentHlthBad, HHIncome) %>%
+  group_by(HHIncome) %>%
+  summarize(mean=mean(DaysMentHlthBad, na.rm=T), )
+
+# looking at how mental health is for different sexes
+data %>%
+  select(DaysMentHlthBad, Gender) %>%
+  group_by(Gender) %>%
+  summarize(mean=mean(DaysMentHlthBad, na.rm=T), )
+
+# looking at how mental health is for people from different races
+data %>%
+  select(DaysMentHlthBad, Race1) %>%
+  group_by(Race1) %>%
+  summarize(mean=mean(DaysMentHlthBad, na.rm=T), )
+
+# looking at how mental health is for people with different sexual orientations
+data %>%
+  select(DaysMentHlthBad, SexOrientation) %>%
+  group_by(SexOrientation) %>%
+  summarize(mean=mean(DaysMentHlthBad, na.rm=T), )
+
+# Violin plots
+# bmi
+ggplot(data) +
+  geom_violin(aes(x = as.factor(BMI_WHO), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(BMI_WHO), y = DaysMentHlthBad))
+
+# physically active
+ggplot(data) +
+  geom_violin(aes(x = as.factor(PhysActive), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(PhysActive), y = DaysMentHlthBad))
+
+# sleep trouble
+ggplot(data) +
+  geom_violin(aes(x = as.factor(SleepTrouble), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(SleepTrouble), y = DaysMentHlthBad))
+
+# tv hours
+ggplot(data) +
+  geom_violin(aes(x = as.factor(TVHrsDay), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(TVHrsDay), y = DaysMentHlthBad))
+
+# computer hours
+ggplot(data) +
+  geom_violin(aes(x = as.factor(CompHrsDay), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(CompHrsDay), y = DaysMentHlthBad))
+
+# smoker
+ggplot(data) +
+  geom_violin(aes(x = as.factor(SmokeNow), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(SmokeNow), y = DaysMentHlthBad))
+
+# regular marijuana
+ggplot(data) +
+  geom_violin(aes(x = as.factor(RegularMarij), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(RegularMarij), y = DaysMentHlthBad))
+
+# hard drugs
+ggplot(data) +
+  geom_violin(aes(x = as.factor(HardDrugs), y = DaysMentHlthBad))
+ggplot(filter(data, DaysMentHlthBad != 0)) +
+  geom_violin(aes(x = as.factor(HardDrugs), y = DaysMentHlthBad))
+```
+
+cleaning the na values in dataset
+
+```{r}
+# removed all rows with missing outcome
+data <- subset(data, data$DaysMentHlthBad != "NA") 
+
+# function that counts the number of NAs in an observation
+na_function <- function(row){
+  sum(is.na(row))
+}
+
+data$na_count <- as.numeric(apply(X = data, FUN = na_function, MARGIN = 1))
+
+# histogram of number of missing values
+ggplot(data) +
+  geom_bar(aes(na_count))
+
+# keeping only those rows with 5 or less missing values
+# eliminating the column that gives NA counts for each observation
+data <- subset(data, data$na_count < 6)[, 1: 16]
+
+# dimensions of our final dataset is 6161* 16 
+dim(data) 
+```
+
+imputing the missing values 
+
+```{r}
+set.seed(650)
+
+# this is a part of our EDA
+# we look at the summary statistics of our predictor variables
+# we look at the histograms and barplots of their distributions
+
+# variables with no missing values
+sum(is.na(data$Age))
+summary(data$Age)
+hist(data$Age, probability = FALSE)
+
+sum(is.na(data$Gender))
+summary(data$Gender)
+count <- table(data$Gender)
+barplot(count)
+
+sum(is.na(data$Race1))
+summary(data$Race1)
+count <- table(data$Race1)
+barplot(count)
+
+sum(is.na(data$PhysActive))
+summary(data$PhysActive)
+count <- table(data$PhysActive)
+barplot(count)
+
+sum(is.na(data$SleepTrouble))
+summary(data$SleepTrouble)
+count <- table(data$SleepTrouble)
+barplot(count)
+
+# continuous variables with missing values
+sum(is.na(data$AlcoholDay))
+summary(data$AlcoholDay)
+hist(data$AlcoholDay, breaks = 100, probability = FALSE)
+data$AlcoholDay[is.na(data$AlcoholDay)] <- median(data$AlcoholDay, na.rm = TRUE)
+# use median instead of mean
+# mean is higher than median - suggests outliers
+# very right skewed distribution!
+
+sum(is.na(data$AlcoholYear))
+summary(data$AlcoholYear)
+hist(data$AlcoholYear, probability = FALSE)
+# mean and median are very different
+# but we don't see any outliers, so we use mean
+# range is simply huge and data points are haphazardly scattered
+data$AlcoholYear[is.na(data$AlcoholYear)] <- mean(data$AlcoholYear, na.rm = TRUE)
+
+# categorical variables with missing values
+sum(is.na(data$HHIncome))
+summary(data$HHIncome)
+count <- table(data$HHIncome)
+barplot(count)
+
+sum(is.na(data$SexOrientation))
+summary(data$SexOrientation)
+count <- table(data$SexOrientation)
+barplot(count)
+
+sum(is.na(data$BMI_WHO))
+summary(data$BMI_WHO)
+count <- table(data$BMI_WHO)
+barplot(count)
+
+sum(is.na(data$TVHrsDay))
+summary(data$TVHrsDay)
+count <- table(data$TVHrsDay)
+barplot(count)
+
+sum(is.na(data$CompHrsDay))
+summary(data$CompHrsDay)
+count <- table(data$CompHrsDay)
+barplot(count)
+
+sum(is.na(data$SmokeNow))
+summary(data$SmokeNow)
+count <- table(data$SmokeNow)
+barplot(count)
+
+sum(is.na(data$RegularMarij))
+summary(data$RegularMarij)
+count <- table(data$RegularMarij)
+barplot(count)
+
+sum(is.na(data$HardDrugs))
+summary(data$HardDrugs)
+count <- table(data$HardDrugs)
+barplot(count)
+
+fill_na_function <- function(x) {
+  x <- as.matrix(x)
+  for (i in 1: dim(x)[2]) {
+    data <- x[, i]
+    prob_i <- table(data)/ sum(is.na(data) == FALSE)
+    data[is.na(data)] <- sample(names(prob_i), sum(is.na(data)), replace = TRUE, prob = prob_i)
+    x[, i] <- data
+  }
+  x <- as.data.frame(x)
+  return(x)
+}
+
+data <- fill_na_function(data)
+
+# converting character data to numeric
+# we convert these variables to integers as they are known to be integers
+data$DaysMentHlthBad <- as.integer(data$DaysMentHlthBad)
+data$Age <- as.integer(data$Age)
+data$AlcoholDay <- as.integer(data$AlcoholDay)
+
+# we don't convert this to integers because we have imputed this variable with the mean
+# the mean may not be an integer
+data$AlcoholYear <- as.numeric(data$AlcoholYear) 
+
+# checking for missing values after imputation
+sum(is.na(data))
+```
+
+creating binary alcohol variables
+
+```{r}
+# Use 5 as a cutoff for alcohol/ day - based off CDC guidelines for men
+data$AlcoholDayCat <- ifelse(data$AlcoholDay >=5, TRUE, FALSE)
+
+# Use 90% percentile to sort of gauge excess drinking - completely arbitrary
+data$AlcoholYearCat <- ifelse(data$AlcoholYear >= quantile(data$AlcoholYear, 0.9, na.rm = TRUE), TRUE, FALSE)
+```
+
+two part model
+
+```{r}
+# Fit two part model to get effect sizes
+two_fit <- tpm(formula_part1 <- DaysMentHlthBad ~ Age + Gender + HHIncome + Race1 + SexOrientation + 
+                 SmokeNow + AlcoholDayCat + AlcoholYearCat + RegularMarij + HardDrugs + 
+                 BMI_WHO + PhysActive + SleepTrouble + TVHrsDay + CompHrsDay, data = data, link_part1 = "logit")
+summary(two_fit)
+
+# Fit lm model on zero and non-zero outcomes - the entire dataset
+full_fit <- lm(DaysMentHlthBad ~ Age + Gender + HHIncome + Race1 + SexOrientation + 
+                 SmokeNow + AlcoholDayCat + AlcoholYearCat + RegularMarij + HardDrugs + 
+                 BMI_WHO + PhysActive + SleepTrouble + TVHrsDay + CompHrsDay, data = data)
+summary(full_fit)
+```
+
+backward elimination
+
+```{r, warning=FALSE, message=FALSE}
+# Use backward elimination with p0=0.25 to get important variables
+olsrr::ols_step_backward_p(full_fit, prem = 0.25, details = FALSE)
+
+# Note: because the sample function in filling missing data can change with different seed, two part model/ backward elimination may be different with each run
+
+# Remove TVHrsDay, CompHrsDay, SmokeNow, AlcoholYearCat
+full_fit_2 <- lm(DaysMentHlthBad ~ Age + Gender + HHIncome + Race1 + SexOrientation + 
+                 AlcoholDayCat + RegularMarij + HardDrugs + 
+                 BMI_WHO + PhysActive + SleepTrouble, data = data)
+summary(full_fit_2)
+
+# Fit lm model on only non-zero outcomes - gives R^2 and easier to do model selection
+non_zero_data <- filter(data, DaysMentHlthBad != 0)
+dim(non_zero_data) # we fit our final model on this 2714* 20 dataset
+non_zero_fit <- lm(DaysMentHlthBad ~ Age + Gender + HHIncome + Race1 + SexOrientation + 
+                 SmokeNow + AlcoholDayCat + AlcoholYearCat + RegularMarij + HardDrugs + 
+                 BMI_WHO + PhysActive + SleepTrouble + TVHrsDay + CompHrsDay, data = non_zero_data)
+summary(non_zero_fit)
+
+# Use backward elimination with p0=0.25 to get important variables
+olsrr::ols_step_backward_p(non_zero_fit, prem = 0.25, details = FALSE)
+
+# Remove HardDrugs, SmokeNow, TVHrsDay - leave controls as is
+non_zero_fit_2 <- lm(DaysMentHlthBad ~ Age + Gender + HHIncome + Race1 + SexOrientation + 
+                 AlcoholDayCat + AlcoholYearCat + RegularMarij + 
+                 BMI_WHO + PhysActive + SleepTrouble + CompHrsDay, data = non_zero_data)
+summary(non_zero_fit_2)
+```
+
+scoring variables
+
+```{r}
+# Create substance abuse score
+non_zero_data$substance_score <-  ifelse(non_zero_data$AlcoholDayCat == TRUE, 1, 0) + 
+                                   ifelse(non_zero_data$AlcoholYearCat == TRUE, 1, 0) +
+                                   ifelse(non_zero_data$RegularMarij == 'Yes', 1, 0)
+
+# Create lifestyle score
+non_zero_data$lifestyle_score <- ifelse(non_zero_data$BMI_WHO == '12.0_18.5', 1, 0) + 
+                                  ifelse(non_zero_data$PhysActive == 'No', 1, 0) + 
+                                  ifelse(non_zero_data$SleepTrouble == 'Yes', 1, 0) + 
+                                  ifelse((non_zero_data$CompHrsDay == '0_hrs' | non_zero_data$CompHrsDay == 'More_4_hr'), 1, 0)
+```
+
+log transformation of outcome 
+
+```{r}
+# we log transform our outcome variable
+# we saw reason to do this in our first EDA plot - histogram plot for raw outcome vs. transformed outcome
+
+# raw outcome - extremely right skewed distribution, peak at zero, unevenly/ sparsely distributed data points
+ggplot(data) +
+  geom_histogram(aes(x=DaysMentHlthBad), bins=15)
+
+# transformed outcome - not visibly skewed, much more evenly distributed data points
+ggplot(non_zero_data) +
+  geom_histogram(aes(x=log(DaysMentHlthBad)), bins=15)
+```
+
+refit with score variables
+
+```{r}
+final_fit <- lm(log(DaysMentHlthBad) ~ Age + Gender + HHIncome + Race1 + SexOrientation + substance_score + lifestyle_score, data = non_zero_data)
+summary(final_fit)
+```
+
+sensitivity analysis (tells how representative our modeling data is of the actual data)
+
+```{r}
+# Raw NHANES data set
+# mean age 
+age <- mean(NHANES$Age, na.rm=TRUE)
+
+# mean age
+age_data <- t(data.frame(mean(NHANES$Age), "Mean age"))
+
+# proportion of sexes
+male <- sum(NHANES$Gender == 'male', na.rm=TRUE)/ sum(!is.na(NHANES$Gender))* 100
+female <- sum(NHANES$Gender == 'female', na.rm=TRUE)/ sum(!is.na(NHANES$Gender))* 100
+
+sex_data <- t(data.frame(c(male, female), c('Male', 'Female')))
+
+# income
+prop_income <- rep(NA, length(levels(NHANES$HHIncome)))
+label_income <- rep(NA, length(levels(NHANES$HHIncome)))
+
+for(i in 1:length(prop_income)){
+  prop_income[i] <- sum(NHANES$HHIncome == levels(NHANES$HHIncome)[i], na.rm=TRUE)/ sum(!is.na(NHANES$HHIncome))* 100
+  label_income[i] <- levels(NHANES$HHIncome)[i]
+}
+income_data <- data.frame(rbind(as.numeric(prop_income), label_income))
+
+# race
+prop_race <- rep(NA, length(levels(NHANES$Race1)))
+label_race <- rep(NA, length(levels(NHANES$Race1)))
+
+for(i in 1:length(prop_race)){
+  prop_race[i] <- sum(NHANES$Race1 == levels(NHANES$Race1)[i], na.rm=TRUE)/ sum(!is.na(NHANES$Race1))* 100
+  label_race[i] <- levels(NHANES$Race1)[i]
+}
+race_data <- data.frame(rbind(as.numeric(prop_race), label_race))
+
+# proportion heterosexual
+prop_hetero <- rep(NA, length(levels(NHANES$SexOrientation)))
+label_hetero <- rep(NA, length(levels(NHANES$SexOrientation)))
+
+for(i in 1:length(prop_hetero)){
+  prop_hetero[i] <- sum(NHANES$SexOrientation == levels(NHANES$SexOrientation)[i], na.rm=TRUE)/ sum(!is.na(NHANES$SexOrientation))* 100
+  label_hetero[i] <- levels(NHANES$SexOrientation)[i]
+}
+hetero_data <- data.frame(rbind(as.numeric(prop_hetero), label_hetero))
+
+nhanes_summary <- data.frame(rbind(t(age_data), t(sex_data), t(income_data), t(race_data), t(hetero_data)))
+colnames(nhanes_summary) <- c('Percentage', 'Label')
+nhanes_summary %>%
+  relocate(Label)
+
+# Our modeling data
+# mean age
+age_data <- t(data.frame(mean(non_zero_data$Age), "Mean age"))
+
+# proportion of sexes
+male <- sum(non_zero_data$Gender == 'male', na.rm=TRUE)/ sum(!is.na(non_zero_data$Gender))* 100
+female <- sum(non_zero_data$Gender == 'female', na.rm=TRUE)/ sum(!is.na(non_zero_data$Gender))* 100
+
+sex_data <- t(data.frame(c(male, female), c('Male', 'Female')))
+
+# income
+non_zero_data$HHIncome <- as.factor(non_zero_data$HHIncome)
+prop_income <- rep(NA, length(levels(non_zero_data$HHIncome)))
+label_income <- rep(NA, length(levels(non_zero_data$HHIncome)))
+
+for(i in 1:length(prop_income)){
+  prop_income[i] <- sum(non_zero_data$HHIncome == levels(non_zero_data$HHIncome)[i], na.rm=TRUE)/ sum(!is.na(non_zero_data$HHIncome))* 100
+  label_income[i] <- levels(non_zero_data$HHIncome)[i]
+}
+income_data <- data.frame(rbind(as.numeric(prop_income), label_income))
+
+# race
+non_zero_data$Race1 <- as.factor(non_zero_data$Race1)
+prop_race <- rep(NA, length(levels(non_zero_data$Race1)))
+label_race <- rep(NA, length(levels(non_zero_data$Race1)))
+
+for(i in 1:length(prop_race)){
+  prop_race[i] <- sum(non_zero_data$Race1 == levels(non_zero_data$Race1)[i], na.rm=TRUE)/ sum(!is.na(non_zero_data$Race1))* 100
+  label_race[i] <- levels(non_zero_data$Race1)[i]
+}
+race_data <- data.frame(rbind(as.numeric(prop_race), label_race))
+
+# proportion heterosexual
+non_zero_data$SexOrientation <- as.factor(non_zero_data$SexOrientation)
+prop_hetero <- rep(NA, length(levels(non_zero_data$SexOrientation)))
+label_hetero <- rep(NA, length(levels(non_zero_data$SexOrientation)))
+
+for(i in 1:length(prop_hetero)){
+  prop_hetero[i] <- sum(non_zero_data$SexOrientation == levels(non_zero_data$SexOrientation)[i], na.rm=TRUE)/ sum(!is.na(non_zero_data$SexOrientation))* 100
+  label_hetero[i] <- levels(non_zero_data$SexOrientation)[i]
+}
+hetero_data <- data.frame(rbind(as.numeric(prop_hetero), label_hetero))
+
+modeling_summary <- data.frame(rbind(t(age_data), t(sex_data), t(income_data), t(race_data), t(hetero_data)))
+colnames(modeling_summary) <- c('Percentage', 'Label')
+modeling_summary %>%
+  relocate(Label)
+
+nhanes_summary %>%
+  inner_join(modeling_summary, by = 'Label') %>%
+  relocate(Label) -> tab
+colnames(tab) <- c('Label', 'Raw NHANES', 'Modeling Data')
+tab$`Raw NHANES` <- as.numeric(tab$`Raw NHANES`)
+tab$`Modeling Data` <- as.numeric(tab$`Modeling Data`)
+tab$Variable <- c('Age', 'Gender (%)', '-', 'Household Income ($) (%)', '-', '-', '-', '-','-', '-', '-', '-','-', '-', '-', 'Race (%)', '-', '-', '-', '-', 'Sexual Orientation (%)', '-', '-')
+tab %>%
+  relocate(Variable) -> tab
+
+tab %>%
+  kbl(digits=2, caption = 'Demographic information for our modeling data vs raw NHANES data') %>%
+  kable_classic(full_width=FALSE, html_font = "Cambria") -> sensitivity_table
+ 
+save_kable(sensitivity_table, file='demographics_table.png', zoom = 3)
+```
+
+residual diagnostics
+
+```{r}
+# get the 4 different types of residuals
+predicted_values <- fitted(final_fit)
+r <- resid(final_fit)
+r_std <- r/ (summary(final_fit)$sig)
+r_stu_i <- rstandard(final_fit)
+r_stu_e <- rstudent(final_fit)
+residuals_matrix <- as.data.frame(cbind(r, r_std, r_stu_i, r_stu_e, predicted_values))
+
+car::avPlots(final_fit)
+psych::pairs.panels(non_zero_data)
+```
+
+checking for LINE assumptions
+
+```{r}
+# residual plot
+# suggests that the homoscedasticity assumption is violated
+ggplot(data = residuals_matrix, aes(x = predicted_values, y = r)) +
+  geom_point(shape = 1) + 
+  labs(title = "Residuals vs predicted values")
+# test for homoscedasticity
+print(bptest(final_fit)) # Breusch-Pagan test
+# histogram of the residuals
+hist(residuals_matrix$r)
+
+# QQ plot
+# suggests that residuals follow a normal distribution
+qq_res <- car::qqPlot(residuals_matrix$r)
+# test for normality
+print(shapiro.test(resid(final_fit)))
+
+# test for independence
+print(dwtest(final_fit)) # Durbin-Watson test
+```
+
+comparing diagnostic plots for a raw fit and our final fit
+
+```{r}
+# raw data
+# - contains missing data
+# - contains all the variables of interest
+# - contains numeric versions of alchohol variables
+# - outcome variable not transformed
+# - contains both zero and non-zero poor mental health days data
+raw_fit <- lm(DaysMentHlthBad ~ Age + Gender + HHIncome + Race1 + SexOrientation + 
+                 SmokeNow + AlcoholDay + AlcoholYear + RegularMarij + HardDrugs + 
+                 BMI_WHO + PhysActive + SleepTrouble + TVHrsDay + CompHrsDay, data = NHANES)
+plot(raw_fit)
+
+influence_raw <- cooks.distance(raw_fit)
+plot(influence_raw, main = "Cook's Distance")
+
+plot(final_fit)
+
+# influential observations
+influence <- cooks.distance(final_fit)
+plot(influence, main = "Cook's distance plot")
+```
+
+```{r}
+# checking for multicollinearity
+car::vif(final_fit)
+
+# final diagnostic plots
+car::residualPlots(final_fit, type = "response", cex = 0.25)
+```
